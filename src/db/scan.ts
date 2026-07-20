@@ -1,5 +1,6 @@
 import { db } from './client.js';
 import { AppError, notFound } from '../lib/errors.js';
+import { effectiveStatus, sortEvents, type TokenEvent } from './prescriptions.js';
 
 export type ScanPatient = { id: string; full_name: string };
 
@@ -16,12 +17,17 @@ export type ScanPrescription = {
   created_at: string;
 };
 
+/** A prescription the pharmacy can no longer dispense, with its full chain trail. */
+export type CompletedPrescription = ScanPrescription & { events: TokenEvent[] };
+
 export type ScanContext = {
   patient: ScanPatient;
   station_type: 'doctor' | 'pharmacy';
   scanned_at: string;
   /** Only populated for pharmacy stations — a doctor doesn't need the dispense list. */
   prescriptions?: ScanPrescription[];
+  /** Pharmacy only. Recently spent/revoked/expired scripts — see `loadRecentlyCompleted`. */
+  recently_completed?: CompletedPrescription[];
 };
 
 export async function loadPatient(patientId: string): Promise<ScanPatient> {
@@ -61,6 +67,53 @@ export async function loadDispensable(patientId: string): Promise<ScanPrescripti
   ) as ScanPrescription[];
 }
 
+const RECENT_WINDOW_DAYS = 30;
+
+/**
+ * Recently completed prescriptions — exhausted, revoked, or expired — with their event
+ * trail attached.
+ *
+ * A pharmacist genuinely needs this: "was this already filled, and when?" is a normal
+ * counter question, and answering it with an empty screen is worse than answering it
+ * with the dispensing record. `loadDispensable` deliberately hides these, which is
+ * right for the dispense list and wrong as the pharmacist's whole view of the patient.
+ *
+ * Nothing here is dispensable. Every one of these ids is refused by
+ * `assertDispensable`, and the ledger would refuse the burn underneath that.
+ */
+export async function loadRecentlyCompleted(patientId: string): Promise<CompletedPrescription[]> {
+  const since = new Date(Date.now() - RECENT_WINDOW_DAYS * 86_400_000).toISOString();
+
+  const { data, error } = await db()
+    .from('prescriptions')
+    .select(
+      'id, drug_details, max_uses, uses_remaining, expires_at, status, policy_id, asset_name, mint_tx_hash, created_at, token_events (id, event_type, actor_role, tx_hash, created_at)',
+    )
+    .eq('patient_id', patientId)
+    .gte('created_at', since)
+    .order('created_at', { ascending: false });
+
+  if (error) throw new AppError('INTERNAL_ERROR', 'Failed to load dispensing history');
+
+  const now = Date.now();
+  return (data ?? [])
+    .filter((p: any) => {
+      const expired = p.expires_at !== null && new Date(p.expires_at).getTime() <= now;
+      // The exact complement of loadDispensable's filter, so a prescription can never
+      // appear in both lists — or fall through the gap between them.
+      const dispensable = p.status === 'active' && p.uses_remaining > 0 && !expired;
+      return !dispensable;
+    })
+    .map((row: any) => {
+      const { token_events, ...rest } = row;
+      return {
+        ...rest,
+        status: effectiveStatus(rest),
+        events: sortEvents(token_events),
+      } as CompletedPrescription;
+    });
+}
+
 export async function buildScanContext(
   patientId: string,
   stationType: 'doctor' | 'pharmacy',
@@ -69,7 +122,12 @@ export async function buildScanContext(
   const patient = await loadPatient(patientId);
   const context: ScanContext = { patient, station_type: stationType, scanned_at: scannedAt };
   if (stationType === 'pharmacy') {
-    context.prescriptions = await loadDispensable(patientId);
+    const [dispensable, completed] = await Promise.all([
+      loadDispensable(patientId),
+      loadRecentlyCompleted(patientId),
+    ]);
+    context.prescriptions = dispensable;
+    context.recently_completed = completed;
   }
   return context;
 }

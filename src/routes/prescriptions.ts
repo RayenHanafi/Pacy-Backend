@@ -10,6 +10,7 @@ import {
   deletePrescription,
   effectiveStatus,
   getPrescription,
+  listForDoctor,
   markRevoked,
   recordEvent,
 } from '../db/prescriptions.js';
@@ -39,6 +40,17 @@ const createBody = z.object({
 });
 
 export async function prescriptionRoutes(app: FastifyInstance): Promise<void> {
+  /**
+   * Everything this doctor has prescribed, newest first, each with its patient and
+   * chain event trail. `requireRole` rather than `requireVerifiedRole`: reading back
+   * your own history isn't a privileged clinical act, and a doctor whose verification
+   * lapsed should still be able to revoke what they wrote.
+   */
+  app.get('/doctor/prescriptions', { preHandler: requireRole('doctor') }, async (request) => {
+    const prescriptions = await listForDoctor(request.auth!.id);
+    return { prescriptions };
+  });
+
   /**
    * Doctor writes a prescription -> mints the token.
    *

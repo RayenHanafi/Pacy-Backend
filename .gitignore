@@ -83,3 +83,5 @@ temp/
 
 # ---- Local planning / handoff docs (not shipped) ----
 PHASES.md
+FRONTEND_HANDOFF.md
+IOT_INTEGRATION.md

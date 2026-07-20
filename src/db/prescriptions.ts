@@ -184,6 +184,57 @@ export async function recordEvent(input: {
   if (error) throw new AppError('INTERNAL_ERROR', `Failed to record token event: ${error.message}`);
 }
 
+/**
+ * Every prescription this doctor has written, newest first.
+ *
+ * Without this a doctor can only revoke the script they just minted, from the mint
+ * confirmation screen — last week's prescription would be unreachable.
+ *
+ * Patient names are fetched in a second query rather than as a nested select: there are
+ * two foreign keys from `prescriptions` into `profiles` (patient and doctor), so an
+ * embedded join has to be disambiguated by constraint name, which is brittle.
+ */
+export async function listForDoctor(
+  doctorId: string,
+): Promise<(PrescriptionRow & { patient: { id: string; full_name: string }; events: TokenEvent[] })[]> {
+  const { data, error } = await db()
+    .from('prescriptions')
+    .select(`${COLUMNS}, token_events (id, event_type, actor_role, tx_hash, created_at)`)
+    .eq('doctor_id', doctorId)
+    .order('created_at', { ascending: false });
+
+  if (error) throw new AppError('INTERNAL_ERROR', `Failed to load prescriptions: ${error.message}`);
+
+  const rows = data ?? [];
+  const patientIds = [...new Set(rows.map((r: any) => r.patient_id))];
+
+  const names = new Map<string, string>();
+  if (patientIds.length > 0) {
+    const { data: profiles, error: profileError } = await db()
+      .from('profiles')
+      .select('id, full_name')
+      .in('id', patientIds);
+    if (profileError) throw new AppError('INTERNAL_ERROR', 'Failed to load patient names');
+    for (const p of profiles ?? []) names.set(p.id, p.full_name);
+  }
+
+  return rows.map((row: any) => {
+    const { token_events, ...rest } = row;
+    return {
+      ...rest,
+      status: effectiveStatus(rest),
+      patient: { id: rest.patient_id, full_name: names.get(rest.patient_id) ?? 'Unknown patient' },
+      events: sortEvents(token_events),
+    };
+  });
+}
+
+export function sortEvents(events: TokenEvent[] | null | undefined): TokenEvent[] {
+  return (events ?? [])
+    .slice()
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+}
+
 export async function listForPatient(
   patientId: string,
 ): Promise<(PrescriptionRow & { events: TokenEvent[] })[]> {
@@ -200,10 +251,7 @@ export async function listForPatient(
     return {
       ...rest,
       status: effectiveStatus(rest),
-      events: (token_events ?? []).sort(
-        (a: TokenEvent, b: TokenEvent) =>
-          new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-      ),
+      events: sortEvents(token_events),
     };
   });
 }
