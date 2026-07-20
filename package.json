@@ -18,7 +18,8 @@
     "e2e:phase3": "tsx scripts/e2e-phase3.ts",
     "e2e:phase4": "tsx scripts/e2e-phase4.ts",
     "e2e:phase5": "tsx scripts/e2e-phase5.ts",
-    "e2e:lists": "tsx scripts/e2e-lists.ts"
+    "e2e:lists": "tsx scripts/e2e-lists.ts",
+    "seed:expired": "tsx scripts/seed-demo-expired.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",

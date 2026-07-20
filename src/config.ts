@@ -55,7 +55,15 @@ export function requireConfig<K extends keyof Config>(key: K): NonNullable<Confi
 
 export const isConfigured = {
   supabase: () => Boolean(config.SUPABASE_URL && config.SUPABASE_SERVICE_ROLE_KEY),
-  supabaseAuth: () => Boolean(config.SUPABASE_JWT_SECRET),
+  /**
+   * JWT verification is configured either way: an ES256 project verifies against the
+   * JWKS endpoint derived from SUPABASE_URL, and only a legacy HS256 project needs a
+   * shared secret. Reporting this as `Boolean(SUPABASE_JWT_SECRET)` said "auth not
+   * configured" on a working ES256 deployment.
+   */
+  supabaseAuth: () => Boolean(config.SUPABASE_JWT_SECRET || config.SUPABASE_URL),
+  authMode: (): 'hs256-secret' | 'jwks' | 'none' =>
+    config.SUPABASE_JWT_SECRET ? 'hs256-secret' : config.SUPABASE_URL ? 'jwks' : 'none',
   blockfrost: () => Boolean(config.BLOCKFROST_PROJECT_ID),
   wallet: () => Boolean(config.SERVICE_WALLET_MNEMONIC),
   qr: () => Boolean(config.QR_TOKEN_SECRET),

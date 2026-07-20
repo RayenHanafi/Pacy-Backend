@@ -78,6 +78,7 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
       configured: {
         supabase: isConfigured.supabase(),
         supabase_auth: isConfigured.supabaseAuth(),
+        auth_mode: isConfigured.authMode(),
         blockfrost: isConfigured.blockfrost(),
         service_wallet: isConfigured.wallet(),
         qr_token: isConfigured.qr(),
