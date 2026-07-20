@@ -260,3 +260,28 @@ Next.js PWA (Vercel)  ──HTTPS──►  Node API service (Railway)  ──�
 - ❌ No live HPCSA/SAPC API integration — seeded verified accounts only.
 - ❌ No real IoT hardware build in this repo — integration contract only, hardware
   owned by teammate.
+
+---
+
+## 13. Locked decisions (hackathon build)
+
+Resolved with the project owner before implementation. This repo is the **BACKEND only**;
+the Next.js PWA lives in a separate repo. Solo developer, single dev machine.
+
+| # | Topic | Decision |
+| - | ----- | -------- |
+| 1 | Service wallet | **One shared preprod wallet** for the whole project. Mnemonic stored in `.env` (`SERVICE_WALLET_MNEMONIC`) for simplicity — never committed. |
+| 2 | Funding | Single wallet funded with preprod tADA from the faucet. Accepted risk: UTxO contention if two mints/burns fire at the exact same second during the demo (mitigated by sequential tx submission). |
+| 3 | Minting policy | **Per-prescription native script.** No expiry → `sig(serviceKey)`. With expiry → `all[ sig(serviceKey), before(expirySlot) ]`. Token uniqueness comes from `asset_name = hex(prescription_id)`; quantity = `max_uses`. |
+| 4 | Database | Supabase project already provisioned: `https://rujemygoawvemvwewplq.supabase.co`. Owner controls it; backend owns schema + migrations + seed. |
+| 5 | Schema ownership | This backend defines and migrates the schema (see ARCHITECTURE.md §4). |
+| 6 | IoT / station auth | Each station (Raspberry Pi) holds a **per-station API key** (`X-Station-Key`), stored hashed in a `stations` table. IoT firmware built by a teammate against the contract in ARCHITECTURE.md §7. |
+| 7 | Patient QR token | Short-lived **backend-issued JWT** (HS256, `QR_TOKEN_SECRET`), 30s expiry, payload `{ patient_id, iat, exp, jti }`. Frontend refreshes every 30s; station POSTs it back to `/stations/scan`. |
+| 8 | Chain semantics | Backend-custodial signing. On-chain enforces uniqueness + refills + expiry. "Doctor mints / pharmacy burns / tied to patient" enforced by the backend auth layer + tx metadata, **not** on-chain multisig. On-chain co-signing = documented Plutus stretch goal. |
+| 9 | Content hash | **SHA-256** over canonical (sorted-key) JSON of prescription content. Stored in DB `content_hash` and in tx metadata (label 674). |
+| 10 | Revoke | In scope, minimal: doctor-initiated `POST /prescriptions/:id/revoke` → burns all remaining units → status `revoked`. |
+| 11 | Repos | Frontend and backend are **two separate repos**. This is the backend. |
+
+> **MVP** = _Minimum Viable Product_ — the smallest version that demonstrates the core
+> value (mint a prescription token, dispense/burn it, block reuse/expiry) end-to-end for
+> the pitch. Everything not needed for that demo is deferred.

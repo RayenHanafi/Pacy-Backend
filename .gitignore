@@ -80,3 +80,6 @@ temp/
 *.pid
 *.seed
 *.pid.lock
+
+# ---- Local planning / handoff docs (not shipped) ----
+PHASES.md
