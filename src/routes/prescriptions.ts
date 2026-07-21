@@ -74,6 +74,21 @@ export async function prescriptionRoutes(app: FastifyInstance): Promise<void> {
     '/prescriptions',
     { preHandler: requireVerifiedRole('doctor') },
     async (request, reply) => {
+      /**
+       * Checked before zod so the message names the actual problem.
+       *
+       * A client built against the pre-signing API sends no `doctor_signature` at all,
+       * and a bare schema failure reports "Request validation failed" — which sends
+       * whoever is debugging it looking at the drug fields. This says what happened and
+       * what to do about it.
+       */
+      if (typeof (request.body as { doctor_signature?: unknown } | undefined)?.doctor_signature !== 'string') {
+        throw new AppError(
+          'VALIDATION_ERROR',
+          'This prescription is unsigned. Prescriptions must now be signed with the doctor’s signing key — enrol one on this device, then try again.',
+        );
+      }
+
       const body = createBody.parse(request.body);
       const doctor = request.auth!;
 
