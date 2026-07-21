@@ -16,6 +16,7 @@
  */
 import { createClient } from '@supabase/supabase-js';
 import { config } from '../src/config.js';
+import { enrolDoctorKey, prescriptionBody } from './lib/doctor-signing.js';
 
 const BASE = process.env.BASE_URL ?? 'https://pacy-backend-production.up.railway.app';
 const PASSWORD = 'PacyDemo123!';
@@ -47,22 +48,34 @@ async function main() {
 
   const me = await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${patientTok}` } });
   const patient = await me.json();
+  const doctorRes = await fetch(`${BASE}/me`, {
+    headers: { authorization: `Bearer ${doctorTok}` },
+  });
+  const doctor = await doctorRes.json();
 
   const expiresAt = new Date(Date.now() + MINUTES * 60_000).toISOString();
+
+  // Stands in for the key the doctor's browser would hold. Enrolling here replaces
+  // whatever key was active — harmless for a demo account, and it means this script
+  // works on a fresh database without manual setup.
+  const key = await enrolDoctorKey(BASE, doctorTok);
 
   const res = await fetch(`${BASE}/prescriptions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${doctorTok}` },
-    body: JSON.stringify({
-      patient_id: patient.id,
-      drug_details: {
-        drug: 'Ciprofloxacin 250mg',
-        dosage: '1 tablet twice daily',
-        instructions: 'Complete the full course. Short-dated script for demonstration.',
-      },
-      max_uses: 1,
-      expires_at: expiresAt,
-    }),
+    body: JSON.stringify(
+      prescriptionBody(key, {
+        patient_id: patient.id,
+        doctor_id: doctor.id,
+        drug_details: {
+          drug: 'Ciprofloxacin 250mg',
+          dosage: '1 tablet twice daily',
+          instructions: 'Complete the full course. Short-dated script for demonstration.',
+        },
+        max_uses: 1,
+        expires_at: expiresAt,
+      }),
+    ),
   });
 
   const body = await res.json();

@@ -9,6 +9,12 @@
 import { createClient } from '@supabase/supabase-js';
 import { config } from '../src/config.js';
 import { db } from '../src/db/client.js';
+import {
+  enrolDoctorKey,
+  generateDoctorKey,
+  prescriptionBody,
+  signContent,
+} from './lib/doctor-signing.js';
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:8080';
 const PASSWORD = 'PacyDemo123!';
@@ -56,6 +62,10 @@ async function main() {
 
   const me = await call('/me', { token: patientTok });
   const patientId: string = me.body.id;
+  const doctorId: string = (await call('/me', { token: doctorTok })).body.id;
+
+  // Stands in for the key the doctor's browser would hold.
+  const key = await enrolDoctorKey(BASE, doctorTok);
 
   const drug = {
     drug: 'Amoxicillin 500mg',
@@ -88,24 +98,61 @@ async function main() {
     badUses.status === 400 && badUses.body?.error?.code === 'VALIDATION_ERROR',
     JSON.stringify(badUses.body));
 
+  const pastExpiryContent = {
+    patient_id: patientId, doctor_id: doctorId, drug_details: drug, max_uses: 1,
+    expires_at: new Date(Date.now() - 86_400_000).toISOString(),
+  };
   const pastExpiry = await call('/prescriptions', {
-    method: 'POST', token: doctorTok,
-    body: {
-      patient_id: patientId, drug_details: drug, max_uses: 1,
-      expires_at: new Date(Date.now() - 86_400_000).toISOString(),
-    },
+    method: 'POST', token: doctorTok, body: prescriptionBody(key, pastExpiryContent),
   });
   check('expires_at in the past -> 400',
     pastExpiry.status === 400, JSON.stringify(pastExpiry.body));
 
+  const unknownContent = {
+    patient_id: '00000000-0000-0000-0000-000000000000',
+    doctor_id: doctorId, drug_details: drug, max_uses: 1, expires_at: null,
+  };
   const unknownPatient = await call('/prescriptions', {
-    method: 'POST', token: doctorTok,
-    body: {
-      patient_id: '00000000-0000-0000-0000-000000000000',
-      drug_details: drug, max_uses: 1, expires_at: null,
-    },
+    method: 'POST', token: doctorTok, body: prescriptionBody(key, unknownContent),
   });
   check('unknown patient -> 404', unknownPatient.status === 404, `got ${unknownPatient.status}`);
+
+  // ---- doctor signature ----
+  //
+  // The reason this feature exists: without a valid signature from a key only the doctor
+  // holds, this backend could mint a prescription attributed to a doctor who never wrote
+  // it. These three cases are that guarantee.
+  console.log('\nDOCTOR SIGNATURE');
+  const validContent = {
+    patient_id: patientId, doctor_id: doctorId, drug_details: drug,
+    max_uses: 1, expires_at: null,
+  };
+
+  const noSig = await call('/prescriptions', {
+    method: 'POST', token: doctorTok,
+    body: { patient_id: patientId, drug_details: drug, max_uses: 1, expires_at: null },
+  });
+  check('missing signature -> 400', noSig.status === 400, `got ${noSig.status}`);
+
+  const foreignKey = generateDoctorKey();
+  const wrongSigner = await call('/prescriptions', {
+    method: 'POST', token: doctorTok,
+    body: { ...prescriptionBody(key, validContent), doctor_signature: signContent(foreignKey, validContent) },
+  });
+  check('signature from an unenrolled key -> 422 INVALID_DOCTOR_SIGNATURE',
+    wrongSigner.status === 422 && wrongSigner.body?.error?.code === 'INVALID_DOCTOR_SIGNATURE',
+    JSON.stringify(wrongSigner.body?.error));
+
+  // Sign 1 refill, then ask for 30. The signature is genuine; the request is not what was
+  // signed. This is the tamper case that matters — a compromised backend rewriting a
+  // doctor's prescription on its way to the chain.
+  const tampered = await call('/prescriptions', {
+    method: 'POST', token: doctorTok,
+    body: { ...prescriptionBody(key, validContent), max_uses: 30 },
+  });
+  check('altered body after signing -> 422 INVALID_DOCTOR_SIGNATURE',
+    tampered.status === 422 && tampered.body?.error?.code === 'INVALID_DOCTOR_SIGNATURE',
+    JSON.stringify(tampered.body?.error));
 
   const beforeCount = (await call('/patient/prescriptions', { token: patientTok }))
     .body.prescriptions.length;
@@ -114,7 +161,10 @@ async function main() {
   console.log('\nMINT (no expiry, 3 refills) — submitting to Cardano preprod');
   const created = await call('/prescriptions', {
     method: 'POST', token: doctorTok,
-    body: { patient_id: patientId, drug_details: drug, max_uses: 3, expires_at: null },
+    body: prescriptionBody(key, {
+      patient_id: patientId, doctor_id: doctorId,
+      drug_details: drug, max_uses: 3, expires_at: null,
+    }),
   });
   check('POST /prescriptions -> 201', created.status === 201, JSON.stringify(created.body));
   check('  uses_remaining === max_uses === 3',
@@ -135,7 +185,10 @@ async function main() {
   const expiry = new Date(Date.now() + 86_400_000).toISOString();
   const timed = await call('/prescriptions', {
     method: 'POST', token: doctorTok,
-    body: { patient_id: patientId, drug_details: drug, max_uses: 1, expires_at: expiry },
+    body: prescriptionBody(key, {
+      patient_id: patientId, doctor_id: doctorId,
+      drug_details: drug, max_uses: 1, expires_at: expiry,
+    }),
   });
   check('POST /prescriptions with expiry -> 201', timed.status === 201, JSON.stringify(timed.body));
   check('  expires_at echoed back', timed.body?.expires_at !== null);

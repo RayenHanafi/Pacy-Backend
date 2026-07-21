@@ -24,6 +24,34 @@ function sortDeep(value: unknown): unknown {
   return value;
 }
 
+export type PrescriptionContent = {
+  patient_id: string;
+  doctor_id: string;
+  drug_details: unknown;
+  max_uses: number;
+  expires_at: string | null;
+};
+
+/**
+ * Puts prescription content into the one form that both the signer and any later auditor
+ * will produce.
+ *
+ * `expires_at` is the whole reason this exists. A client sends `2026-08-20T12:15:51.543Z`;
+ * Postgres stores it as `timestamptz` and hands it back as `2026-08-20T12:15:51.543+00:00`.
+ * Same instant, different string, different SHA-256 — so re-hashing the stored row
+ * produced a hash that did not match the one on-chain, and the doctor's signature could
+ * never be re-verified after a database round-trip. The audit was unreproducible by
+ * construction, which would have quietly made the whole guarantee unprovable.
+ *
+ * Normalising through `Date` collapses every equivalent representation onto one.
+ */
+export function normalizePrescriptionContent(input: PrescriptionContent): PrescriptionContent {
+  return {
+    ...input,
+    expires_at: input.expires_at === null ? null : new Date(input.expires_at).toISOString(),
+  };
+}
+
 /**
  * The prescription content hash written to chain metadata.
  *
@@ -31,14 +59,8 @@ function sortDeep(value: unknown): unknown {
  * record can later be proven un-tampered. Nothing here identifies a human on-chain —
  * only the resulting hash is published.
  */
-export function prescriptionContentHash(input: {
-  patient_id: string;
-  doctor_id: string;
-  drug_details: unknown;
-  max_uses: number;
-  expires_at: string | null;
-}): string {
-  return sha256Hex(canonicalJson(input));
+export function prescriptionContentHash(input: PrescriptionContent): string {
+  return sha256Hex(canonicalJson(normalizePrescriptionContent(input)));
 }
 
 /** Station API keys: random raw key shown once, only its hash is stored. */

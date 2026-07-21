@@ -23,13 +23,26 @@ export type MintResult = {
  * block. Callers that need to read the resulting balance must wait (see
  * `waitForAssetQuantity`), because Blockfrost's UTxO view lags tx submission.
  */
+/**
+ * Cardano rejects any metadata string longer than 64 bytes, and a base64 P-256 signature
+ * is 88 characters. Splitting it into an array of chunks is the standard way round this;
+ * a reader concatenates them back.
+ */
+function chunk64(value: string): string[] {
+  const parts: string[] = [];
+  for (let i = 0; i < value.length; i += 64) parts.push(value.slice(i, i + 64));
+  return parts;
+}
+
 export async function mintPrescriptionToken(params: {
   prescriptionId: string;
   quantity: number;
   contentHash: string;
+  /** The prescribing doctor's signature over the content — proof a human authorised this. */
+  doctorSignature: string;
   expiresAt: Date | null;
 }): Promise<MintResult> {
-  const { prescriptionId, quantity, contentHash, expiresAt } = params;
+  const { prescriptionId, quantity, contentHash, doctorSignature, expiresAt } = params;
 
   // Serialized: concurrent builds would select the same unconfirmed inputs.
   return enqueueChainWrite(async () => {
@@ -46,8 +59,10 @@ export async function mintPrescriptionToken(params: {
         recipient: address,
       });
 
-      // Content hash only — never drug details, never anything identifying a patient.
-      tx.setMetadata(674, { hash: contentHash, v: 1 });
+      // Content hash and the doctor's signature over it — never drug details, never
+      // anything identifying a patient. `sig` makes the authorisation publicly checkable:
+      // anyone can verify it against the doctor's enrolled public key, without us.
+      tx.setMetadata(674, { hash: contentHash, sig: chunk64(doctorSignature), v: 2 });
 
       // A transaction may not outlive the policy's own time-lock.
       if (policy.expirySlot !== undefined) tx.setTimeToExpire(String(policy.expirySlot));

@@ -10,6 +10,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { config } from '../src/config.js';
 import { db } from '../src/db/client.js';
+import { enrolDoctorKey, prescriptionBody, type DoctorKey } from './lib/doctor-signing.js';
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:8080';
 const PASSWORD = 'PacyDemo123!';
@@ -64,11 +65,17 @@ async function main() {
   const patientId: string = me.body.id;
   const doctorId: string = (await call('/me', { token: doctorTok })).body.id;
 
+  // Stands in for the key the doctor's browser would hold.
+  const key: DoctorKey = await enrolDoctorKey(BASE, doctorTok);
+
   // ── mint a 2-fill prescription ────────────────────────────────────────────
   console.log('SETUP: minting a 2-fill prescription');
   const rx = await call('/prescriptions', {
     method: 'POST', token: doctorTok,
-    body: { patient_id: patientId, drug_details: drug, max_uses: 2, expires_at: null },
+    body: prescriptionBody(key, {
+      patient_id: patientId, doctor_id: doctorId,
+      drug_details: drug, max_uses: 2, expires_at: null,
+    }),
   });
   check('minted with uses_remaining 2',
     rx.status === 201 && rx.body?.uses_remaining === 2, JSON.stringify(rx.body?.error));
@@ -142,7 +149,10 @@ async function main() {
   console.log('\nREVOKE');
   const rx2 = await call('/prescriptions', {
     method: 'POST', token: doctorTok,
-    body: { patient_id: patientId, drug_details: drug, max_uses: 3, expires_at: null },
+    body: prescriptionBody(key, {
+      patient_id: patientId, doctor_id: doctorId,
+      drug_details: drug, max_uses: 3, expires_at: null,
+    }),
   });
   const rx2Id: string = rx2.body.id;
   check('minted a 3-fill prescription to revoke', rx2.status === 201);

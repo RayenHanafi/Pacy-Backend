@@ -8,6 +8,7 @@ import { meRoutes } from './routes/me.js';
 import { patientRoutes } from './routes/patient.js';
 import { stationRoutes } from './routes/stations.js';
 import { prescriptionRoutes } from './routes/prescriptions.js';
+import { doctorRoutes } from './routes/doctor.js';
 
 export async function buildServer() {
   const app = Fastify({
@@ -90,6 +91,7 @@ export async function buildServer() {
   await app.register(patientRoutes);
   await app.register(stationRoutes);
   await app.register(prescriptionRoutes);
+  await app.register(doctorRoutes);
 
   return app;
 }

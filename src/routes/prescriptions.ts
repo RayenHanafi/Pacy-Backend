@@ -17,6 +17,8 @@ import {
 import { mintPrescriptionToken } from '../chain/mint.js';
 import { burnPrescriptionUnit } from '../chain/burn.js';
 import { prescriptionContentHash } from '../lib/hash.js';
+import { getActiveKey } from '../db/signingKeys.js';
+import { verifyDoctorSignature } from '../crypto/doctorSignature.js';
 import { AppError, forbidden } from '../lib/errors.js';
 
 const idParam = z.object({ id: z.string().uuid() });
@@ -37,6 +39,15 @@ const createBody = z.object({
     .refine((v) => v === null || !Number.isNaN(Date.parse(v)), {
       message: 'expires_at must be an ISO-8601 date string or null',
     }),
+  /**
+   * ECDSA P-256 signature (raw r‖s, base64) over the canonical JSON of the prescription
+   * content, produced by the doctor's browser-held private key.
+   *
+   * Required. Making it optional would void the entire guarantee: a backend that can mint
+   * without a signature is a backend that can forge prescriptions, which is exactly what
+   * this field exists to prevent.
+   */
+  doctor_signature: z.string().min(1).max(200),
 });
 
 export async function prescriptionRoutes(app: FastifyInstance): Promise<void> {
@@ -74,13 +85,44 @@ export async function prescriptionRoutes(app: FastifyInstance): Promise<void> {
       // Confirms the target exists AND is actually a patient.
       const patient = await loadPatient(body.patient_id);
 
-      const contentHash = prescriptionContentHash({
+      /**
+       * The doctor's signature covers exactly the fields that define the prescription's
+       * meaning — the same object that becomes the on-chain content hash, so the
+       * signature and the hash can never describe different prescriptions.
+       *
+       * Verified BEFORE the row is written and long before the chain is touched: an
+       * unsigned prescription must leave no trace at all, on-chain or off.
+       */
+      const content = {
         patient_id: patient.id,
         doctor_id: doctor.id,
         drug_details: body.drug_details,
         max_uses: body.max_uses,
         expires_at: expiresAt,
+      };
+
+      const signingKey = await getActiveKey(doctor.id);
+      if (!signingKey) {
+        throw new AppError(
+          'DOCTOR_KEY_NOT_ENROLLED',
+          'No signing key is enrolled for this doctor — set one up on this device first',
+        );
+      }
+
+      const signatureValid = verifyDoctorSignature({
+        content,
+        signatureBase64: body.doctor_signature,
+        publicKeyBase64: signingKey.public_key,
       });
+      if (!signatureValid) {
+        throw new AppError(
+          'INVALID_DOCTOR_SIGNATURE',
+          'Prescription signature did not verify against the enrolled signing key',
+          { expected_fingerprint: signingKey.fingerprint },
+        );
+      }
+
+      const contentHash = prescriptionContentHash(content);
 
       const row = await createPrescription({
         patient_id: patient.id,
@@ -89,6 +131,8 @@ export async function prescriptionRoutes(app: FastifyInstance): Promise<void> {
         content_hash: contentHash,
         max_uses: body.max_uses,
         expires_at: expiresAt,
+        doctor_signature: body.doctor_signature,
+        signing_key_id: signingKey.id,
       });
 
       let mint;
@@ -97,6 +141,7 @@ export async function prescriptionRoutes(app: FastifyInstance): Promise<void> {
           prescriptionId: row.id,
           quantity: body.max_uses,
           contentHash,
+          doctorSignature: body.doctor_signature,
           expiresAt: expiresAt === null ? null : new Date(expiresAt),
         });
       } catch (err) {
@@ -127,6 +172,7 @@ export async function prescriptionRoutes(app: FastifyInstance): Promise<void> {
         ...updated,
         status: effectiveStatus(updated),
         patient: { id: patient.id, full_name: patient.full_name },
+        signing_key_fingerprint: signingKey.fingerprint,
       });
     },
   );

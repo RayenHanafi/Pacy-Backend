@@ -18,10 +18,13 @@ export type PrescriptionRow = {
   mint_tx_hash: string | null;
   status: PrescriptionStatus;
   created_at: string;
+  /** Null on prescriptions minted before doctor signing existed. */
+  doctor_signature: string | null;
+  signing_key_id: string | null;
 };
 
 const COLUMNS =
-  'id, patient_id, doctor_id, drug_details, content_hash, max_uses, uses_remaining, expires_at, policy_id, asset_name, mint_tx_hash, status, created_at';
+  'id, patient_id, doctor_id, drug_details, content_hash, max_uses, uses_remaining, expires_at, policy_id, asset_name, mint_tx_hash, status, created_at, doctor_signature, signing_key_id';
 
 /**
  * Effective status for display. A prescription past its expiry is `expired` even if the
@@ -45,6 +48,8 @@ export async function createPrescription(input: {
   content_hash: string;
   max_uses: number;
   expires_at: string | null;
+  doctor_signature: string;
+  signing_key_id: string;
 }): Promise<PrescriptionRow> {
   const { data, error } = await db()
     .from('prescriptions')
