@@ -20,7 +20,9 @@
     "e2e:phase5": "tsx scripts/e2e-phase5.ts",
     "e2e:lists": "tsx scripts/e2e-lists.ts",
     "seed:expired": "tsx scripts/seed-demo-expired.ts",
-    "verify": "tsx scripts/verify-onchain.ts"
+    "verify": "tsx scripts/verify-onchain.ts",
+    "onchain:wallets": "tsx onchain/offchain/gen-wallets.ts",
+    "onchain:spike": "tsx onchain/offchain/spike.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
