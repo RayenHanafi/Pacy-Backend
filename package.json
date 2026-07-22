@@ -23,6 +23,7 @@
     "seed:expired": "tsx scripts/seed-demo-expired.ts",
     "verify": "tsx scripts/verify-onchain.ts",
     "onchain:wallets": "tsx onchain/offchain/gen-wallets.ts",
+    "onchain:prep": "tsx onchain/offchain/prep.ts",
     "onchain:spike": "tsx onchain/offchain/spike.ts"
   },
   "dependencies": {

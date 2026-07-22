@@ -34,6 +34,39 @@ function newBuilder(): MeshTxBuilder {
   return new MeshTxBuilder({ fetcher: p, submitter: p, verbose: false });
 }
 
+/**
+ * Ensures a wallet has at least two SUBSTANTIAL UTxOs (>= `min` lovelace each). A Plutus
+ * transaction needs one UTxO for collateral AND at least one more to spend fees from;
+ * tiny dust UTxOs (the ~1.2 ADA that rides back from a burn) do not count. A wallet with
+ * one big UTxO plus dust cannot build a script tx, so we split the big one into two.
+ * Self-payment only.
+ */
+async function ensureTwoUtxos(w: DemoWallet, min = 20_000_000n): Promise<void> {
+  const p = provider();
+  let utxos = await p.fetchAddressUTxOs(w.address);
+  const fat = () => utxos.filter((u) => lovelaceOf(u) >= min).length;
+  if (fat() >= 2) return;
+
+  console.log(`  … ${w.role} has ${fat()} substantial UTxO(s); splitting one into two`);
+  const unsigned = await newBuilder()
+    .txOut(w.address, [{ unit: 'lovelace', quantity: String(min) }])
+    .txOut(w.address, [{ unit: 'lovelace', quantity: String(min) }])
+    .changeAddress(w.address)
+    .selectUtxosFrom(utxos)
+    .complete();
+  const signed = await w.wallet.signTx(unsigned, true);
+  const tx = await w.wallet.submitTx(signed);
+  console.log(`    split tx ${tx.slice(0, 12)}… — waiting for confirmation`);
+
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 5_000));
+    utxos = await p.fetchAddressUTxOs(w.address);
+    if (fat() >= 2) return;
+  }
+  throw new Error(`${w.role} did not reach two substantial UTxOs in time`);
+}
+
 /** Polls until `unit` appears at `address`, or times out. */
 async function waitForToken(address: string, unit: string, timeoutMs = 120_000): Promise<UTxO> {
   const p = provider();
@@ -49,9 +82,22 @@ async function waitForToken(address: string, unit: string, timeoutMs = 120_000):
 
 // ── Step 1: the pharmacy tries to mint — the validator must refuse ─────────────────
 async function pharmacyCannotMint(pharmacy: DemoWallet, policy: ReturnType<typeof buildPolicy>) {
-  const utxos = await pharmacy.wallet.getUtxos();
-  const collateral = pureAda(utxos);
-  if (!collateral) throw new Error('Pharmacy has no pure-ADA UTxO for collateral — fund it.');
+  const utxos = await provider().fetchAddressUTxOs(pharmacy.address);
+  // Use the SMALLEST adequate pure-ADA UTxO for collateral (it only needs ~5 tADA), so
+  // the big UTxOs stay free to fund the tx. EXPLICIT input (below) means Mesh runs no
+  // coin-selection at all, so a "balance/depleted" failure is impossible — the only
+  // thing that can make this transaction fail is the validator itself.
+  const pureAscending = utxos
+    .filter((u) => u.output.amount.length === 1 && u.output.amount[0].unit === 'lovelace')
+    .sort((a, b) => Number(lovelaceOf(a) - lovelaceOf(b)));
+  const collateral = pureAscending.find((u) => lovelaceOf(u) >= 5_000_000n);
+  const funding = [...utxos]
+    .filter((u) => u !== collateral)
+    .sort((a, b) => Number(lovelaceOf(b) - lovelaceOf(a)))[0];
+  if (!collateral || !funding || lovelaceOf(funding) < 5_000_000n) {
+    console.log(`  ⚠ Skipped: pharmacy lacks two spendable UTxOs (has ${utxos.length}).`);
+    return false;
+  }
 
   try {
     const unsigned = await newBuilder()
@@ -59,6 +105,7 @@ async function pharmacyCannotMint(pharmacy: DemoWallet, policy: ReturnType<typeo
       .mint('1', policy.policyId, ASSET_NAME_HEX)
       .mintingScript(policy.scriptCbor)
       .mintRedeemerValue(mConStr0([]))
+      .txIn(funding.input.txHash, funding.input.outputIndex, funding.output.amount, funding.output.address)
       .txOut(pharmacy.address, [
         { unit: 'lovelace', quantity: '2000000' },
         { unit: policy.policyId + ASSET_NAME_HEX, quantity: '1' },
@@ -71,23 +118,30 @@ async function pharmacyCannotMint(pharmacy: DemoWallet, policy: ReturnType<typeo
       )
       .requiredSignerHash(pharmacy.keyHash) // pharmacy — the WRONG key for a mint
       .changeAddress(pharmacy.address)
-      .selectUtxosFrom(utxos.filter((u) => u !== collateral))
       .complete();
 
-    // If we get here the script accepted a pharmacy-signed mint — that would be a FAILURE.
-    await pharmacy.wallet.signTx(unsigned, true);
-    console.log('  ✗ UNEXPECTED: the chain built a pharmacy-signed mint. Validator is too loose.');
+    // Building succeeded — try to actually put it on-chain. If the validator is doing
+    // its job, the ledger rejects this at evaluation/submission.
+    const signed = await pharmacy.wallet.signTx(unsigned, true);
+    const tx = await pharmacy.wallet.submitTx(signed);
+    console.log(`  ✗ UNEXPECTED: pharmacy-signed mint was ACCEPTED on-chain! tx: ${tx}`);
     return false;
   } catch (err) {
-    console.log('  ✓ Rejected: the validator refused a mint that the doctor did not sign.');
-    console.log(`    (${(err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 120)})`);
+    const msg = err instanceof Error ? err.message : String(err);
+    const reason = /ValidationTagMismatch/.test(msg)
+      ? 'ledger rejected it — Plutus script validation failed (ValidationTagMismatch)'
+      : /PlutusFailure|ScriptFailure|EvaluationFailure/i.test(msg)
+        ? 'Plutus script evaluation failed'
+        : msg.split('\n')[0].slice(0, 160);
+    console.log('  ✓ Rejected: the validator refused a mint the doctor did not sign.');
+    console.log(`    reason: ${reason}`);
     return true;
   }
 }
 
 // ── Step 2: the doctor mints — accepted ────────────────────────────────────────────
 async function doctorMints(doctor: DemoWallet, pharmacy: DemoWallet, policy: ReturnType<typeof buildPolicy>) {
-  const utxos = await doctor.wallet.getUtxos();
+  const utxos = await provider().fetchAddressUTxOs(doctor.address);
   if (utxos.length < 2) {
     throw new Error(
       `Doctor needs >=2 UTxOs (one for collateral). Has ${utxos.length}. Fund the doctor again from the faucet.`,
@@ -128,7 +182,7 @@ async function pharmacyBurns(pharmacy: DemoWallet, policy: ReturnType<typeof bui
   console.log('  … waiting for the minted token to land at the pharmacy');
   const tokenUtxo = await waitForToken(pharmacy.address, unit);
 
-  const utxos = await pharmacy.wallet.getUtxos();
+  const utxos = await provider().fetchAddressUTxOs(pharmacy.address);
   const collateral = pureAda(utxos.filter((u) => u !== tokenUtxo));
   if (!collateral) throw new Error('Pharmacy has no pure-ADA UTxO for collateral.');
 
@@ -166,6 +220,11 @@ async function main() {
 
   console.log(`\nPolicy id: ${policy.policyId}`);
   console.log(`Asset:     ${ASSET_NAME}\n`);
+
+  console.log('0) Preflight — every actor needs a spare UTxO for Plutus collateral:');
+  await ensureTwoUtxos(doctor);
+  await ensureTwoUtxos(pharmacy);
+  console.log('  ✓ doctor and pharmacy each have >=2 UTxOs\n');
 
   console.log('1) Pharmacy attempts to MINT (should be refused by the chain):');
   const rejected = await pharmacyCannotMint(pharmacy, policy);
