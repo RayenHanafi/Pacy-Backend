@@ -201,8 +201,9 @@ backend bridges them:
    station — a short-lived "current scan" for that station.
 2. The operator's browser (logged in as the station owner) **polls**
    `GET /stations/current-scan` (~every 1.5s while on the "waiting for patient" screen).
-   It returns the latest scan for the caller's station, then the browser proceeds with
-   that patient's context. Returns `204` when there's no fresh scan.
+   It atomically consumes and returns the latest scan for the caller's station, then
+   the browser proceeds with that patient's context. Later polls return `204` until
+   the Pi posts a genuinely new scan.
 
 We use polling, not Supabase Realtime — fewer moving parts under the deadline and it
 works even before the IoT firmware is ready.
