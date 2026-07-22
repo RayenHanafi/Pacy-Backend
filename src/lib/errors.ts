@@ -15,6 +15,9 @@ export type ErrorCode =
   | 'PRESCRIPTION_NOT_ACTIVE'
   | 'DOCTOR_KEY_NOT_ENROLLED'
   | 'INVALID_DOCTOR_SIGNATURE'
+  | 'CHAIN_WALLET_NOT_ENROLLED'
+  | 'CHAIN_NOT_INITIALISED'
+  | 'CHAIN_DRAFT_NOT_FOUND'
   | 'CHAIN_ERROR'
   | 'INTERNAL_ERROR';
 
@@ -32,6 +35,10 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   // Not an error the doctor caused — the client routes them to enrolment.
   DOCTOR_KEY_NOT_ENROLLED: 409,
   INVALID_DOCTOR_SIGNATURE: 422,
+  // Routes the user to wallet setup rather than signalling a failure.
+  CHAIN_WALLET_NOT_ENROLLED: 409,
+  CHAIN_NOT_INITIALISED: 503,
+  CHAIN_DRAFT_NOT_FOUND: 404,
   CHAIN_ERROR: 502,
   INTERNAL_ERROR: 500,
 };
