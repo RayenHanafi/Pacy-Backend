@@ -53,9 +53,11 @@ export async function stationRoutes(app: FastifyInstance): Promise<void> {
     const stationType = auth.role === 'doctor' ? 'doctor' : 'pharmacy';
 
     // Mirror it into the station slot too, so a browser poll and a camera scan can't
-    // disagree about who is currently at the counter.
+    // disagree about who is currently at the counter. This request already returns
+    // the patient inline, so record it as consumed rather than replaying it when the
+    // operator finishes and polling resumes.
     const scannedAt = auth.station_id
-      ? await recordStationScan(auth.station_id, patientId)
+      ? await recordStationScan(auth.station_id, patientId, true)
       : new Date().toISOString();
 
     return buildScanContext(patientId, stationType, scannedAt);

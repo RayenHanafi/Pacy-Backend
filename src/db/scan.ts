@@ -133,12 +133,21 @@ export async function buildScanContext(
 }
 
 /** Records the latest scan for a station so the operator's browser can pick it up. */
-export async function recordStationScan(stationId: string, patientId: string): Promise<string> {
+export async function recordStationScan(
+  stationId: string,
+  patientId: string,
+  consumed = false,
+): Promise<string> {
   const scannedAt = new Date().toISOString();
   const { error } = await db()
     .from('station_scans')
     .upsert(
-      { station_id: stationId, patient_id: patientId, scanned_at: scannedAt, consumed_at: null },
+      {
+        station_id: stationId,
+        patient_id: patientId,
+        scanned_at: scannedAt,
+        consumed_at: consumed ? scannedAt : null,
+      },
       { onConflict: 'station_id' },
     );
   if (error) throw new AppError('INTERNAL_ERROR', 'Failed to record scan');
@@ -167,5 +176,21 @@ export async function takeCurrentScan(
   const age = (Date.now() - new Date(data.scanned_at).getTime()) / 1000;
   if (age > maxAgeSeconds) return null;
 
-  return { patient_id: data.patient_id, scanned_at: data.scanned_at };
+  // Claim exactly the scan we read. Including scanned_at and consumed_at in
+  // the filter makes concurrent browser polls safe: only one request can take
+  // this scan, and a newer Raspberry Pi scan can never be consumed by an older
+  // in-flight request.
+  const { data: consumed, error: consumeError } = await db()
+    .from('station_scans')
+    .update({ consumed_at: new Date().toISOString() })
+    .eq('station_id', stationId)
+    .eq('scanned_at', data.scanned_at)
+    .is('consumed_at', null)
+    .select('patient_id, scanned_at')
+    .maybeSingle();
+
+  if (consumeError) throw new AppError('INTERNAL_ERROR', 'Failed to consume station scan');
+  if (!consumed) return null;
+
+  return { patient_id: consumed.patient_id, scanned_at: consumed.scanned_at };
 }
