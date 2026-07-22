@@ -30,6 +30,7 @@ service-wallet*.json
 seed-phrase*.txt
 mnemonic*.txt
 onchain/.demo-wallets.json
+onchain/.settings-wallets.json
 
 # ---- Logs ----
 logs/
