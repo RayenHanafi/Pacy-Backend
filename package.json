@@ -26,7 +26,8 @@
     "onchain:prep": "tsx onchain/offchain/prep.ts",
     "onchain:spike": "tsx onchain/offchain/spike.ts",
     "onchain:spike2": "tsx onchain/offchain/spike2.ts",
-    "plutus:e2e": "tsx scripts/plutus-e2e.ts"
+    "plutus:e2e": "tsx scripts/plutus-e2e.ts",
+    "plutus:http": "tsx scripts/plutus-http-e2e.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
