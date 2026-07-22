@@ -99,6 +99,7 @@ export async function chainPrescriptionRoutes(app: FastifyInstance): Promise<voi
       throw new AppError('VALIDATION_ERROR', 'expires_at must be in the future');
     }
 
+    await ensureHoldingUtxos(); // no-op when the clean-UTxO buffer is healthy; self-heals otherwise
     const patient = await loadPatient(body.patient_id);
     const content = {
       patient_id: patient.id,
@@ -186,6 +187,7 @@ export async function chainPrescriptionRoutes(app: FastifyInstance): Promise<voi
     const row = await getPrescription(id);
     assertDispensable(row); // status, expiry, uses — never trust the client
 
+    await ensureHoldingUtxos(); // keep the holding buffer healthy for collateral/funding
     const assetNameHex = stringToHex(assetNameFor(row.id));
     const { unsignedTx } = await buildBurnUnsigned({ pharmacyKeyHash: wallet.key_hash, assetNameHex, quantity: 1 });
     return reply.status(200).send({ prescription_id: row.id, unsigned_tx: unsignedTx });
