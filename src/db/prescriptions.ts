@@ -48,8 +48,10 @@ export async function createPrescription(input: {
   content_hash: string;
   max_uses: number;
   expires_at: string | null;
-  doctor_signature: string;
-  signing_key_id: string;
+  // Null on the on-chain (Plutus) path: there the doctor signs the Cardano transaction
+  // itself, so a separate P-256 signature/key does not apply.
+  doctor_signature: string | null;
+  signing_key_id: string | null;
 }): Promise<PrescriptionRow> {
   const { data, error } = await db()
     .from('prescriptions')
