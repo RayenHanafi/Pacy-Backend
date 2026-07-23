@@ -40,10 +40,18 @@ const enrolBody = z.object({
 
 const prepareBody = z.object({
   patient_id: z.string().uuid(),
+  // One prescription (one token, one expiry, one refill count) can carry several medicines.
   drug_details: z.object({
-    drug: z.string().min(1),
-    dosage: z.string().min(1),
-    instructions: z.string().min(1),
+    medicines: z
+      .array(
+        z.object({
+          drug: z.string().min(1),
+          dosage: z.string().min(1),
+          instructions: z.string().min(1),
+        }),
+      )
+      .min(1)
+      .max(20),
     diagnosis: z.string().optional(),
   }),
   max_uses: z.number().int().min(1).max(50),

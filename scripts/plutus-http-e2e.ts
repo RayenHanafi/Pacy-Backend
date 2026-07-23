@@ -65,10 +65,11 @@ async function main() {
   const patientId: string = (await call('/me', { token: patientTok })).body.id;
 
   const drug = {
-    drug: 'Metformin 500mg',
-    dosage: '1 tablet twice daily',
-    instructions: 'Take with meals.',
-    diagnosis: 'Type 2 diabetes',
+    medicines: [
+      { drug: 'Metformin 500mg', dosage: '1 tablet twice daily', instructions: 'Take with meals.' },
+      { drug: 'Lisinopril 10mg', dosage: '1 tablet daily', instructions: 'Take in the morning.' },
+    ],
+    diagnosis: 'Type 2 diabetes with hypertension',
   };
 
   console.log('ENROLMENT (on-chain allow-list update — slow, ~30–60s each)');
