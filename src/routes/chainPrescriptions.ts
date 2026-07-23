@@ -128,6 +128,7 @@ export async function chainPrescriptionRoutes(app: FastifyInstance): Promise<voi
         assetNameHex,
         quantity: body.max_uses,
         contentHash,
+        expiresAt: expiresAt === null ? null : new Date(expiresAt),
       });
       return reply.status(201).send({ prescription_id: row.id, unsigned_tx: unsignedTx });
     } catch (err) {
@@ -189,7 +190,12 @@ export async function chainPrescriptionRoutes(app: FastifyInstance): Promise<voi
 
     await ensureHoldingUtxos(); // keep the holding buffer healthy for collateral/funding
     const assetNameHex = stringToHex(assetNameFor(row.id));
-    const { unsignedTx } = await buildBurnUnsigned({ pharmacyKeyHash: wallet.key_hash, assetNameHex, quantity: 1 });
+    const { unsignedTx } = await buildBurnUnsigned({
+      pharmacyKeyHash: wallet.key_hash,
+      assetNameHex,
+      quantity: 1,
+      expiresAt: row.expires_at === null ? null : new Date(row.expires_at),
+    });
     return reply.status(200).send({ prescription_id: row.id, unsigned_tx: unsignedTx });
   });
 

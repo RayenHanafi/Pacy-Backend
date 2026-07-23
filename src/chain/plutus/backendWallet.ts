@@ -29,24 +29,35 @@ export async function holdingKeyHash(): Promise<string> {
  * needs one for collateral plus at least one more to spend; a wallet holding a single big
  * UTxO cannot build one. Splits by paying itself. Safe to call before any chain write.
  */
-export async function ensureHoldingUtxos(need = 10, min = 10_000_000n): Promise<void> {
+export async function ensureHoldingUtxos(need = 4, min = 10_000_000n): Promise<void> {
   const p = blockfrost();
   const address = await serviceAddress();
   let utxos = await p.fetchAddressUTxOs(address);
   const clean = () => utxos.filter((u) => isPureAda(u) && lovelaceOf(u) >= min).length;
+  // Enough clean UTxOs already? A single op only needs two (collateral + funding).
   if (clean() >= need) return;
 
-  const shortfall = need - clean();
-  const wallet = await serviceWallet();
-  let b = newBuilder();
-  for (let i = 0; i < shortfall; i++) b = b.txOut(address, [{ unit: 'lovelace', quantity: String(min) }]);
-  // Fund the buffer from the CLUTTERED UTxOs only, preserving the clean ones we already
-  // have. One generous split up front; downstream ops reuse the change (>= 5 ADA still
-  // qualifies in pickInputs), so no re-splitting is needed mid-flow.
   const dirty = utxos.filter((u) => !(isPureAda(u) && lovelaceOf(u) >= min));
-  const unsigned = await b.changeAddress(address).selectUtxosFrom(dirty).complete();
-  const signed = await wallet.signTx(unsigned, true);
-  await wallet.submitTx(signed);
+  if (dirty.length === 0) {
+    if (clean() >= 2) return; // enough for one op even without topping up
+    throw new Error('holding wallet has no UTxOs to form collateral from');
+  }
+
+  const shortfall = need - clean();
+  try {
+    // Top up from the cluttered UTxOs, preserving the clean ones we already have.
+    const wallet = await serviceWallet();
+    let b = newBuilder();
+    for (let i = 0; i < shortfall; i++) b = b.txOut(address, [{ unit: 'lovelace', quantity: String(min) }]);
+    const unsigned = await b.changeAddress(address).selectUtxosFrom(dirty).complete();
+    const signed = await wallet.signTx(unsigned, true);
+    await wallet.submitTx(signed);
+  } catch (err) {
+    // Could not top up (fragmented/insufficient cluttered funds). If we still have enough
+    // clean UTxOs for one operation, proceed rather than fail.
+    if (clean() >= 2) return;
+    throw err;
+  }
 
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
@@ -54,5 +65,6 @@ export async function ensureHoldingUtxos(need = 10, min = 10_000_000n): Promise<
     utxos = await p.fetchAddressUTxOs(address);
     if (clean() >= need) return;
   }
+  if (clean() >= 2) return; // topped up at least enough for one op
   throw new Error('holding wallet did not reach enough clean UTxOs in time');
 }

@@ -16,8 +16,12 @@ import { plutusContracts } from './config.js';
 import { holdingWallet, holdingAddress } from './backendWallet.js';
 import { currentSettingsUtxo } from './settings.js';
 import { newBuilder, pickInputs, waitForToken } from './txHelpers.js';
+import { slotForDate } from '../slots.js';
 import { blockfrost } from '../provider.js';
 import { chainError, AppError } from '../../lib/errors.js';
+
+/** Expiry as POSIX milliseconds for the on-chain datum; 0 means "never expires". */
+const expiryDatum = (expiresAt: Date | null): number => (expiresAt ? expiresAt.getTime() : 0);
 
 /** Builds the unsigned mint tx. The doctor's key hash is the required (policy) signer. */
 export async function buildMintUnsigned(params: {
@@ -25,8 +29,9 @@ export async function buildMintUnsigned(params: {
   assetNameHex: string;
   quantity: number;
   contentHash: string;
+  expiresAt: Date | null;
 }): Promise<{ unsignedTx: string }> {
-  const { doctorKeyHash, assetNameHex, quantity, contentHash } = params;
+  const { doctorKeyHash, assetNameHex, quantity, contentHash, expiresAt } = params;
   const c = plutusContracts();
   const holding = await holdingAddress();
   const settings = await currentSettingsUtxo();
@@ -38,7 +43,8 @@ export async function buildMintUnsigned(params: {
 
   try {
     // Explicit funding input (pure ADA) — no auto-selection, so the tx stays small and
-    // never drags in the holding wallet's unrelated native-path tokens.
+    // never drags in the holding wallet's unrelated native-path tokens. The token output
+    // carries the expiry as an inline datum, which the burn later enforces on-chain.
     const unsignedTx = await newBuilder()
       .mintPlutusScriptV3()
       .mint(String(quantity), c.policyId, assetNameHex)
@@ -47,9 +53,10 @@ export async function buildMintUnsigned(params: {
       .readOnlyTxInReference(settings.input.txHash, settings.input.outputIndex)
       .txIn(funding.input.txHash, funding.input.outputIndex, funding.output.amount, funding.output.address)
       .txOut(holding, [
-        { unit: 'lovelace', quantity: '2000000' },
+        { unit: 'lovelace', quantity: '2500000' },
         { unit, quantity: String(quantity) },
       ])
+      .txOutInlineDatumValue(expiryDatum(expiresAt))
       .txInCollateral(collateral.input.txHash, collateral.input.outputIndex, collateral.output.amount, collateral.output.address)
       .requiredSignerHash(doctorKeyHash) // the policy checks this against the enrolled doctors
       .metadataValue(674, { hash: contentHash })
@@ -66,8 +73,10 @@ export async function buildBurnUnsigned(params: {
   pharmacyKeyHash: string;
   assetNameHex: string;
   quantity?: number;
+  /** The prescription's expiry — bounds the tx so the policy's on-chain expiry check passes. */
+  expiresAt: Date | null;
 }): Promise<{ unsignedTx: string }> {
-  const { pharmacyKeyHash, assetNameHex, quantity = 1 } = params;
+  const { pharmacyKeyHash, assetNameHex, quantity = 1, expiresAt } = params;
   const c = plutusContracts();
   const holding = await holdingAddress();
   const settings = await currentSettingsUtxo();
@@ -82,7 +91,7 @@ export async function buildBurnUnsigned(params: {
   if (!collateral || !funding) throw chainError('Holding wallet lacks spendable UTxOs for the burn');
 
   try {
-    const unsignedTx = await newBuilder()
+    let builder = newBuilder()
       .mintPlutusScriptV3()
       .mint('-' + String(quantity), c.policyId, assetNameHex)
       .mintingScript(c.policyCbor)
@@ -92,8 +101,13 @@ export async function buildBurnUnsigned(params: {
       .txIn(funding.input.txHash, funding.input.outputIndex, funding.output.amount, funding.output.address)
       .txInCollateral(collateral.input.txHash, collateral.input.outputIndex, collateral.output.amount, collateral.output.address)
       .requiredSignerHash(pharmacyKeyHash) // the policy checks this against the enrolled pharmacies
-      .changeAddress(holding)
-      .complete();
+      .changeAddress(holding);
+
+    // Bound the tx to end at or before expiry, so the policy's on-chain expiry check passes
+    // (and the ledger itself rejects a burn submitted after expiry).
+    if (expiresAt) builder = builder.invalidHereafter(slotForDate(expiresAt));
+
+    const unsignedTx = await builder.complete();
     return { unsignedTx };
   } catch (err) {
     throw chainError(`Failed to build burn tx: ${err instanceof Error ? err.message : String(err)}`);

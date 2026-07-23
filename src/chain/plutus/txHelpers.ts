@@ -47,7 +47,9 @@ export async function submitStaleSafe(
       return await build(utxos);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (/already been included|already spent|BadInputsUTxO|MempoolFailure|inputs/i.test(msg)) {
+      // Genuine stale-input signals only — NOT a bare "inputs", which also appears in the
+      // TxInfo dump of a legitimate script rejection (which must never be retried).
+      if (/BadInputsUTxO|All inputs are spent|already been included|MempoolFailure/i.test(msg)) {
         lastErr = err;
         await new Promise((r) => setTimeout(r, 6_000));
         continue;
