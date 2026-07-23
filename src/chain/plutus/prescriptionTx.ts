@@ -90,6 +90,12 @@ export async function buildBurnUnsigned(params: {
   const { collateral, funding } = pickInputs(utxos.filter((u) => u !== tokenUtxo));
   if (!collateral || !funding) throw chainError('Holding wallet lacks spendable UTxOs for the burn');
 
+  // How many units remain after this burn. The leftover must be sent back to the holding
+  // wallet WITH the expiry datum re-attached — otherwise Mesh returns it as a plain change
+  // output with no datum, and the next dispense's on-chain expiry check has nothing to read.
+  const held = BigInt(tokenUtxo.output.amount.find((a) => a.unit === unit)?.quantity ?? '0');
+  const remaining = held - BigInt(quantity);
+
   try {
     let builder = newBuilder()
       .mintPlutusScriptV3()
@@ -100,8 +106,18 @@ export async function buildBurnUnsigned(params: {
       .txIn(tokenUtxo.input.txHash, tokenUtxo.input.outputIndex, tokenUtxo.output.amount, tokenUtxo.output.address)
       .txIn(funding.input.txHash, funding.input.outputIndex, funding.output.amount, funding.output.address)
       .txInCollateral(collateral.input.txHash, collateral.input.outputIndex, collateral.output.amount, collateral.output.address)
-      .requiredSignerHash(pharmacyKeyHash) // the policy checks this against the enrolled pharmacies
-      .changeAddress(holding);
+      .requiredSignerHash(pharmacyKeyHash); // the policy checks this against the enrolled pharmacies
+
+    if (remaining > 0n) {
+      builder = builder
+        .txOut(holding, [
+          { unit: 'lovelace', quantity: '2500000' },
+          { unit, quantity: remaining.toString() },
+        ])
+        .txOutInlineDatumValue(expiryDatum(expiresAt)); // carry the expiry forward
+    }
+
+    builder = builder.changeAddress(holding);
 
     // Bound the tx to end at or before expiry, so the policy's on-chain expiry check passes
     // (and the ledger itself rejects a burn submitted after expiry).

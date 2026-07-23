@@ -105,17 +105,32 @@ async function main() {
   check('  status active, uses_remaining 2', commit.body?.status === 'active' && commit.body?.uses_remaining === 2);
   if (commit.body?.mint_tx_hash) console.log(`     mint tx: https://preprod.cardanoscan.io/transaction/${commit.body.mint_tx_hash}`);
 
-  console.log('\nDISPENSE — prepare -> sign -> commit (burn 1)');
-  const dprep = await call(`/prescriptions/${prescriptionId}/dispense/prepare`, { method: 'POST', token: pharmacyTok });
-  check('dispense/prepare -> 200 with unsigned_tx', dprep.status === 200 && typeof dprep.body?.unsigned_tx === 'string', JSON.stringify(dprep.body));
+  async function dispense() {
+    const dprep = await call(`/prescriptions/${prescriptionId}/dispense/prepare`, { method: 'POST', token: pharmacyTok });
+    if (dprep.status !== 200 || typeof dprep.body?.unsigned_tx !== 'string') {
+      return { prepOk: false, dprep, dcommit: undefined as any };
+    }
+    const signed = await pharmacy.wallet.signTx(dprep.body.unsigned_tx, true);
+    const dcommit = await call(`/prescriptions/${prescriptionId}/dispense/commit`, {
+      method: 'POST', token: pharmacyTok, body: { signed_tx: signed },
+    });
+    return { prepOk: true, dprep, dcommit };
+  }
 
-  const pharmacySigned = await pharmacy.wallet.signTx(dprep.body.unsigned_tx, true);
-  const dcommit = await call(`/prescriptions/${prescriptionId}/dispense/commit`, {
-    method: 'POST', token: pharmacyTok, body: { signed_tx: pharmacySigned },
-  });
-  check('dispense/commit -> 200 with burn_tx_hash', dcommit.status === 200 && /^[0-9a-f]{64}$/.test(dcommit.body?.burn_tx_hash ?? ''), JSON.stringify(dcommit.body));
-  check('  uses_remaining decremented to 1', dcommit.body?.uses_remaining === 1);
-  if (dcommit.body?.burn_tx_hash) console.log(`     burn tx: https://preprod.cardanoscan.io/transaction/${dcommit.body.burn_tx_hash}`);
+  console.log('\nDISPENSE #1 — burn one refill (2 -> 1)');
+  const d1 = await dispense();
+  check('dispense #1 -> 200 with burn_tx_hash', d1.dcommit?.status === 200 && /^[0-9a-f]{64}$/.test(d1.dcommit?.body?.burn_tx_hash ?? ''), JSON.stringify(d1.dcommit?.body));
+  check('  uses_remaining 1', d1.dcommit?.body?.uses_remaining === 1);
+  if (d1.dcommit?.body?.burn_tx_hash) console.log(`     burn tx: https://preprod.cardanoscan.io/transaction/${d1.dcommit.body.burn_tx_hash}`);
+
+  console.log('  … waiting ~30s for the remaining token (with its datum) to settle');
+  await new Promise((r) => setTimeout(r, 30_000));
+
+  console.log('DISPENSE #2 — burn the LAST refill (1 -> 0) — the multi-refill datum test');
+  const d2 = await dispense();
+  check('dispense #2 -> 200 with burn_tx_hash', d2.dcommit?.status === 200 && /^[0-9a-f]{64}$/.test(d2.dcommit?.body?.burn_tx_hash ?? ''), JSON.stringify(d2.dcommit?.body));
+  check('  uses_remaining 0 (remaining token carried its datum)', d2.dcommit?.body?.uses_remaining === 0);
+  if (d2.dcommit?.body?.burn_tx_hash) console.log(`     burn tx: https://preprod.cardanoscan.io/transaction/${d2.dcommit.body.burn_tx_hash}`);
 
   console.log('\nAUTH GUARDS');
   const phTriesMint = await call('/prescriptions/prepare', {
