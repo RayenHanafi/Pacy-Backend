@@ -14,7 +14,10 @@ import { getChainConfig, setChainConfig, type ChainConfigRow } from '../../db/ch
 import { blockfrost } from '../provider.js';
 import { AppError } from '../../lib/errors.js';
 
-const SETTINGS_ADA = '5000000';
+// The settings UTxO holds the whole allow-list in its datum, so its min-ADA grows with the
+// number of enrolled practitioners. Hold a generous amount (refundable when respent) so a
+// realistic allow-list never trips BabbageOutputTooSmallUTxO.
+const SETTINGS_ADA = '10000000';
 
 async function deployFreshSettings(doctors: string[], pharmacies: string[]): Promise<UTxO> {
   const c = plutusContracts();

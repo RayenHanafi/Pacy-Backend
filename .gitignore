@@ -92,3 +92,7 @@ FRONTEND_DOCTOR_SIGNING.md
 CARDANO_DEV_BRIEF.md
 ONCHAIN.md
 FRONTEND_PATH_A.md
+DECENTRALIZED_ARCHITECTURE.md
+# ---- Test wallets ----
+scripts/.http-test-wallets.json
+onchain/.plutus-holding.json

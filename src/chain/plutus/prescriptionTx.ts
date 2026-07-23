@@ -16,7 +16,7 @@ import { plutusContracts } from './config.js';
 import { holdingWallet, holdingAddress } from './backendWallet.js';
 import { currentSettingsUtxo } from './settings.js';
 import { newBuilder, pickInputs, waitForToken } from './txHelpers.js';
-import { slotForDate } from '../slots.js';
+import { slotForDate, currentSlot } from '../slots.js';
 import { blockfrost } from '../provider.js';
 import { chainError, AppError } from '../../lib/errors.js';
 
@@ -119,9 +119,16 @@ export async function buildBurnUnsigned(params: {
 
     builder = builder.changeAddress(holding);
 
-    // Bound the tx to end at or before expiry, so the policy's on-chain expiry check passes
-    // (and the ledger itself rejects a burn submitted after expiry).
-    if (expiresAt) builder = builder.invalidHereafter(slotForDate(expiresAt));
+    // Bound the tx's validity end so the policy's on-chain `validity_end <= expiry` check
+    // passes. Use a SHORT window from now (never beyond the expiry itself) — pointing it at
+    // a far-future expiry slot directly would exceed the node's ~36h time-forecast horizon
+    // and be rejected as PastHorizon. A near-term bound still proves the burn happens before
+    // expiry for any not-yet-expired prescription; an expired one can't produce a valid
+    // bound (it would have to be in the past) and is rejected on-chain anyway.
+    if (expiresAt) {
+      const window = currentSlot() + 2 * 60 * 60; // ~2 hours of slots (preprod: 1s slots)
+      builder = builder.invalidHereafter(Math.min(window, slotForDate(expiresAt)));
+    }
 
     const unsignedTx = await builder.complete();
     return { unsignedTx };

@@ -8,9 +8,16 @@
  * Validates the endpoints the frontend integrates against: /chain/wallet enrolment, then
  * prepare -> sign -> commit for both mint and dispense. Submits REAL preprod transactions.
  */
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 import { MeshWallet, deserializeAddress } from '@meshsdk/core';
 import { config } from '../src/config.js';
+
+// Reuse the SAME test wallets across runs (git-ignored). Generating a fresh wallet every
+// run would enrol a new key each time and bloat the on-chain allow-list unboundedly.
+const WALLET_FILE = join(dirname(fileURLToPath(import.meta.url)), '.http-test-wallets.json');
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:8080';
 const PASSWORD = 'PacyDemo123!';
@@ -44,10 +51,16 @@ async function call(path: string, opts: { token?: string; method?: string; body?
   return { status: res.status, body: text ? JSON.parse(text) : undefined };
 }
 
-/** Stands in for the browser wallet — key only, no provider (signing needs neither). */
-async function browserWallet() {
-  const words = (MeshWallet.brew() as string[]).join(' ').split(' ');
-  const wallet = new MeshWallet({ networkId: 0, key: { type: 'mnemonic', words } });
+/** Stands in for the browser wallet — persisted per role so enrolment stays idempotent. */
+async function browserWallet(role: 'doctor' | 'pharmacy') {
+  const store: Record<string, string> = existsSync(WALLET_FILE)
+    ? JSON.parse(readFileSync(WALLET_FILE, 'utf8'))
+    : {};
+  if (!store[role]) {
+    store[role] = (MeshWallet.brew() as string[]).join(' ');
+    writeFileSync(WALLET_FILE, JSON.stringify(store, null, 2));
+  }
+  const wallet = new MeshWallet({ networkId: 0, key: { type: 'mnemonic', words: store[role].split(' ') } });
   const maybeInit = (wallet as unknown as { init?: () => Promise<void> }).init;
   if (typeof maybeInit === 'function') await maybeInit.call(wallet);
   const address = await wallet.getChangeAddress();
@@ -73,8 +86,8 @@ async function main() {
   };
 
   console.log('ENROLMENT (on-chain allow-list update — slow, ~30–60s each)');
-  const doctor = await browserWallet();
-  const pharmacy = await browserWallet();
+  const doctor = await browserWallet('doctor');
+  const pharmacy = await browserWallet('pharmacy');
 
   const enrolDoc = await call('/chain/wallet', {
     method: 'POST', token: doctorTok, body: { address: doctor.address, key_hash: doctor.keyHash },
@@ -89,10 +102,14 @@ async function main() {
   const status = await call('/chain/wallet', { token: doctorTok });
   check('GET /chain/wallet shows enrolled', status.body?.enrolled === true && status.body?.key_hash === doctor.keyHash);
 
-  console.log('\nMINT — prepare -> sign -> commit (2 refills)');
+  // Far-future expiry (like the real frontend) — exercises the on-chain expiry datum AND
+  // the time-forecast-horizon handling in the burn.
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // +30 days
+
+  console.log('\nMINT — prepare -> sign -> commit (2 refills, expires in 30 days)');
   const prep = await call('/prescriptions/prepare', {
     method: 'POST', token: doctorTok,
-    body: { patient_id: patientId, drug_details: drug, max_uses: 2, expires_at: null },
+    body: { patient_id: patientId, drug_details: drug, max_uses: 2, expires_at: expiresAt },
   });
   check('prepare -> 201 with unsigned_tx', prep.status === 201 && typeof prep.body?.unsigned_tx === 'string', JSON.stringify(prep.body));
   const prescriptionId: string = prep.body.prescription_id;

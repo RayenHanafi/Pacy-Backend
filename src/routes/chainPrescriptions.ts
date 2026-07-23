@@ -136,7 +136,10 @@ export async function chainPrescriptionRoutes(app: FastifyInstance): Promise<voi
         assetNameHex,
         quantity: body.max_uses,
         contentHash,
-        expiresAt: expiresAt === null ? null : new Date(expiresAt),
+        // On-chain expiry is disabled for now (kept in the contract as a prototype). Expiry
+        // is enforced by the backend at every dispense via assertDispensable. Passing null
+        // means the token's datum records "no expiry", so the policy skips the time check.
+        expiresAt: null,
       });
       return reply.status(201).send({ prescription_id: row.id, unsigned_tx: unsignedTx });
     } catch (err) {
@@ -202,7 +205,9 @@ export async function chainPrescriptionRoutes(app: FastifyInstance): Promise<voi
       pharmacyKeyHash: wallet.key_hash,
       assetNameHex,
       quantity: 1,
-      expiresAt: row.expires_at === null ? null : new Date(row.expires_at),
+      // On-chain expiry disabled (see prepare). Expiry was already re-checked above via
+      // assertDispensable, so the ledger doesn't need to re-enforce it here.
+      expiresAt: null,
     });
     return reply.status(200).send({ prescription_id: row.id, unsigned_tx: unsignedTx });
   });
