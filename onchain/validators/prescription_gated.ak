@@ -1,19 +1,13 @@
-//// Pacy — prescription minting policy (Checkpoint 2 + on-chain expiry).
+//// Pacy — prescription minting policy (Checkpoint 2).
 ////
-//// Enforces "doctors mint, pharmacies burn" against the on-chain allow-list (read from
-//// the settings UTxO as a reference input), AND enforces per-prescription expiry.
-////
-//// Expiry: at mint the token is created carrying an INLINE DATUM = its expiry as POSIX
-//// milliseconds (0 means "never expires"). On a burn, the policy reads that datum from the
-//// token input and requires the transaction's validity range to end at or before the
-//// expiry. Since the ledger only accepts a transaction within its validity range, a
-//// dispense after expiry becomes impossible by construction — the same guarantee the
-//// native-script `before(slot)` time-lock gave, but per-prescription under one policy id.
+//// Enforces "doctors mint, pharmacies burn" on-chain against the allow-list read from the
+//// settings UTxO (a reference input). Expiry and refill counts are enforced by the backend
+//// (refills are also bounded by the token quantity the ledger tracks). Keeping the policy
+//// free of a time check keeps mint/burn simple and robust — no per-token datum required.
 
 use aiken/collection/dict
 use aiken/collection/list
 use aiken/crypto.{ScriptHash}
-use aiken/interval.{Finite}
 use cardano/address.{Script}
 use cardano/assets.{PolicyId}
 use cardano/transaction.{InlineDatum, Input, Transaction}
@@ -42,10 +36,8 @@ validator prescription_gated(settings_script: ScriptHash) {
       // Minting — at least one enrolled doctor must have signed.
       list.any(settings.doctors, fn(d) { list.has(self.extra_signatories, d) })
     } else if total < 0 {
-      // Burning — an enrolled pharmacy must sign AND the prescription must not be expired.
-      let pharmacy_ok =
-        list.any(settings.pharmacies, fn(p) { list.has(self.extra_signatories, p) })
-      pharmacy_ok && not_expired(self, policy_id)
+      // Burning — at least one enrolled pharmacy must have signed.
+      list.any(settings.pharmacies, fn(p) { list.has(self.extra_signatories, p) })
     } else {
       False
     }
@@ -53,28 +45,5 @@ validator prescription_gated(settings_script: ScriptHash) {
 
   else(_) {
     fail
-  }
-}
-
-/// Reads the expiry (POSIX ms) from the datum of the token input being burned, and checks
-/// the transaction is bounded to end at or before it. 0 means "never expires".
-fn not_expired(self: Transaction, policy_id: PolicyId) -> Bool {
-  expect Some(token_input) =
-    list.find(
-      self.inputs,
-      fn(i: Input) { !dict.is_empty(assets.tokens(i.output.value, policy_id)) },
-    )
-  expect InlineDatum(raw) = token_input.output.datum
-  expect expiry: Int = raw
-
-  if expiry == 0 {
-    True
-  } else {
-    when self.validity_range.upper_bound.bound_type is {
-      // The tx must not be valid past the expiry.
-      Finite(upper) -> upper <= expiry
-      // No finite upper bound -> cannot prove it is before expiry -> reject.
-      _ -> False
-    }
   }
 }

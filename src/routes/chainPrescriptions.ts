@@ -55,10 +55,12 @@ const prepareBody = z.object({
     diagnosis: z.string().optional(),
   }),
   max_uses: z.number().int().min(1).max(50),
+  // Optional — a prescription may have no expiry. Omit it, or send null, or an ISO-8601 date.
   expires_at: z
     .string()
+    .refine((v) => !Number.isNaN(Date.parse(v)), 'expires_at must be an ISO-8601 date')
     .nullable()
-    .refine((v) => v === null || !Number.isNaN(Date.parse(v)), 'expires_at must be ISO-8601 or null'),
+    .optional(),
 });
 
 const commitBody = z.object({ prescription_id: z.string().uuid(), signed_tx: z.string().min(1) });
@@ -102,7 +104,7 @@ export async function chainPrescriptionRoutes(app: FastifyInstance): Promise<voi
       throw new AppError('CHAIN_WALLET_NOT_ENROLLED', 'Set up your signing wallet on this device first');
     }
 
-    const expiresAt = body.expires_at;
+    const expiresAt = body.expires_at ?? null;
     if (expiresAt !== null && Date.parse(expiresAt) <= Date.now()) {
       throw new AppError('VALIDATION_ERROR', 'expires_at must be in the future');
     }
@@ -136,10 +138,6 @@ export async function chainPrescriptionRoutes(app: FastifyInstance): Promise<voi
         assetNameHex,
         quantity: body.max_uses,
         contentHash,
-        // On-chain expiry is disabled for now (kept in the contract as a prototype). Expiry
-        // is enforced by the backend at every dispense via assertDispensable. Passing null
-        // means the token's datum records "no expiry", so the policy skips the time check.
-        expiresAt: null,
       });
       return reply.status(201).send({ prescription_id: row.id, unsigned_tx: unsignedTx });
     } catch (err) {
@@ -205,11 +203,6 @@ export async function chainPrescriptionRoutes(app: FastifyInstance): Promise<voi
       pharmacyKeyHash: wallet.key_hash,
       assetNameHex,
       quantity: 1,
-      // Pass the real expiry so the tx is bounded correctly. This makes tokens that were
-      // minted WITH an on-chain expiry datum (before expiry was disabled) still burnable,
-      // while tokens minted with no expiry (datum 0) are unaffected. Expiry itself is
-      // enforced by the backend via assertDispensable above; this just keeps the ledger happy.
-      expiresAt: row.expires_at === null ? null : new Date(row.expires_at),
     });
     return reply.status(200).send({ prescription_id: row.id, unsigned_tx: unsignedTx });
   });
