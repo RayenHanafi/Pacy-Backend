@@ -205,9 +205,11 @@ export async function chainPrescriptionRoutes(app: FastifyInstance): Promise<voi
       pharmacyKeyHash: wallet.key_hash,
       assetNameHex,
       quantity: 1,
-      // On-chain expiry disabled (see prepare). Expiry was already re-checked above via
-      // assertDispensable, so the ledger doesn't need to re-enforce it here.
-      expiresAt: null,
+      // Pass the real expiry so the tx is bounded correctly. This makes tokens that were
+      // minted WITH an on-chain expiry datum (before expiry was disabled) still burnable,
+      // while tokens minted with no expiry (datum 0) are unaffected. Expiry itself is
+      // enforced by the backend via assertDispensable above; this just keeps the ledger happy.
+      expiresAt: row.expires_at === null ? null : new Date(row.expires_at),
     });
     return reply.status(200).send({ prescription_id: row.id, unsigned_tx: unsignedTx });
   });
