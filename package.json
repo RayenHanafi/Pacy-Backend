@@ -13,6 +13,7 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "seed": "tsx scripts/seed.ts",
+    "seed:extra": "tsx scripts/seed-extra.ts",
     "stations:rotate": "tsx scripts/rotate-station-keys.ts",
     "spike": "tsx scripts/spike.ts",
     "wallet:new": "tsx scripts/new-wallet.ts",
